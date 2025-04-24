@@ -1,37 +1,90 @@
-# Dockerfile for BlackLantern
-
+# Use the official Kali Linux base image
 FROM kalilinux/kali-rolling
 
-LABEL maintainer="InfintiWarrior"
+# Set the maintainer and description
+LABEL maintainer="InfinitiWarrior"
 LABEL description="BlackLantern - Offensive Security Toolkit"
 
-# Update and install base tools
+# Update and install necessary packages
 RUN apt update && apt upgrade -y && \
     apt install -y \
-    figlet \
-    net-tools \
-    iputils-ping \
-    curl \
-    git \
     nmap \
-    sqlmap \
+    masscan \
+    amass \
+    theharvester \
+    whatweb \
+    dnsenum \
+    dnsrecon \
+    sublist3r \
+    dirb \
+    gobuster \
+    ffuf \
+    feroxbuster \
     hydra \
+    sqlmap \
     nikto \
-    aircrack-ng \
+    metasploit-framework \
+    binwalk \
+    bettercap \
+    beef-xss \
+    responder \
+    crackmapexec \
+    impacket-scripts \
+    socat \
+    curl \
+    wget \
+    jq \
     tmux \
+    gcc \
+    clang \
+    make \
+    python3 \
+    python3-pip \
+    bash \
     zsh \
     nano \
-    gcc \
-    make \
-    sudo && \
-    apt clean
+    vim \
+    figlet \
+    cowsay \
+    sudo \
+    aircrack-ng \
+    ethtool \
+    tcpdump \
+    wireshark \
+    netcat-traditional \
+    smbclient \
+    gdb \
+    gdbserver \
+    strace \
+    ltrace \
+    radare2 \
+    ghidra \
+    iputils-ping \
+    net-tools \
+    iproute2 \
+    rsync \
+    ufw \
+    hostname \
+    binutils \
+    ettercap-text-only \
+    && apt clean && rm -rf /var/lib/apt/lists/*
 
-# Copy startup script
+# Install additional tools like LinPEAS and SearchSploit from GitHub
+RUN git clone https://github.com/carlospolop/PEASS-ng.git /root/PEASS-ng && \
+    git clone https://github.com/rapid7/metasploit-framework.git /root/metasploit-framework && \
+    ln -s /root/metasploit-framework/msfvenom /usr/local/bin/msfvenom && \
+    git clone https://github.com/offensive-security/exploitdb.git /root/exploitdb && \
+    ln -s /root/exploitdb/searchsploit /usr/local/bin/searchsploit
+
+# Copy the run.sh script to the container
 COPY run.sh /root/run.sh
 RUN chmod +x /root/run.sh
 
-# Set shell prompt with figlet banner
+# Set the prompt using figlet for a customized banner
 RUN echo 'figlet "BlackLantern"' >> /root/.bashrc
 
+# Set working directory to /root
 WORKDIR /root
+
+# Set the default command to bash
 CMD ["bash"]
