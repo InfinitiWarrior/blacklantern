@@ -76,10 +76,9 @@ RUN git clone https://github.com/carlospolop/PEASS-ng.git /root/PEASS-ng && \
     git clone https://github.com/offensive-security/exploitdb.git /root/exploitdb && \
     ln -s /root/exploitdb/searchsploit /usr/local/bin/searchsploit
 
-# Copy the run.sh script to the container
-COPY run.sh /root/run.sh
-RUN chmod +x /root/run.sh
-
+# Copy the blacklantern.sh script to the container
+COPY blacklantern.sh /root/blacklantern.sh
+RUN chmod +x /root/blacklantern.sh
 # Set the prompt using figlet for a customized banner
 RUN echo 'figlet "BlackLantern"' >> /root/.bashrc
 
