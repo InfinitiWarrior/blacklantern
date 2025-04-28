@@ -3,55 +3,73 @@
 # ========== Settings ==========
 NETWORK_RANGE="192.168.0.0/24"
 RESULTS_DIR="attack_results"
-ALIVE_IPS="$RESULTS_DIR/alive_ips.txt"
-PING_SWEEP="$RESULTS_DIR/ping_sweep.gnmap"
-SCAN_RESULTS="$RESULTS_DIR/nmap_detailed_scan.gnmap"
-HOSTNAMES="$RESULTS_DIR/hostnames.txt"
+RESULT_JSON="$RESULTS_DIR/scan_report.json"
 COMMON_PORTS="21,22,23,25,80,443,445,139,3306,3389,6379,8080,5900"
 
 # Create results folder
 mkdir -p "$RESULTS_DIR"
 
+# Empty previous JSON
+echo "[]" > "$RESULT_JSON"
+
 # ========== 1. Find Alive Hosts ==========
 echo "[+] Scanning network for alive hosts on $NETWORK_RANGE..."
-nmap -sn "$NETWORK_RANGE" -oG "$PING_SWEEP"
+ALIVE_IPS=$(nmap -sn "$NETWORK_RANGE" -oG - | awk '/Up$/{print $2}')
 
-# Extract alive IPs
-grep "Up" "$PING_SWEEP" | awk '{print $2}' > "$ALIVE_IPS"
+if [[ -z "$ALIVE_IPS" ]]; then
+    echo "[!] No alive hosts found. Exiting."
+    exit 1
+fi
 
 echo "[+] Alive IPs found:"
-cat "$ALIVE_IPS"
+echo "$ALIVE_IPS"
 
-# ========== 2. Scan Alive Hosts ==========
-echo "[+] Scanning alive hosts for open ports..."
-nmap -p "$COMMON_PORTS" --open -oG "$SCAN_RESULTS" -iL "$ALIVE_IPS"
+# ========== 2. Scan Alive Hosts and Analyze ==========
+echo "[+] Scanning alive hosts for open ports and doing analysis..."
 
-# ========== 3. Hostname Lookup ==========
-echo "[+] Resolving hostnames..."
-> "$HOSTNAMES"  # Clear previous results
-while read -r ip; do
-    hostname=$(nslookup "$ip" 2>/dev/null | grep 'name =' | awk '{print $4}' | sed 's/\.$//')
-    if [[ -n "$hostname" ]]; then
-        echo "$ip $hostname" >> "$HOSTNAMES"
-    else
-        echo "$ip (no hostname)" >> "$HOSTNAMES"
+REPORTS=()
+
+for ip in $ALIVE_IPS; do
+    echo "[*] Scanning $ip..."
+    
+    # Get open ports
+    OPEN_PORTS=$(nmap -p "$COMMON_PORTS" --open "$ip" -oG - | awk '/Ports:/{print $0}' | sed 's/.*Ports: //' | awk -F'/' '{print $1}' | paste -sd, -)
+
+    # Lookup hostname
+    HOSTNAME=$(getent hosts "$ip" | awk '{print $2}')
+    if [[ -z "$HOSTNAME" ]]; then
+        HOSTNAME="(no hostname)"
     fi
-done < "$ALIVE_IPS"
 
-echo "[+] Hostnames saved to $HOSTNAMES"
-echo ""
+    # Security Analysis based on open ports
+    SEVERITY="low"
+    if echo "$OPEN_PORTS" | grep -qE "(23|445|139)"; then
+        SEVERITY="high"
+    elif echo "$OPEN_PORTS" | grep -qE "(21|3306|6379|5900)"; then
+        SEVERITY="medium"
+    elif echo "$OPEN_PORTS" | grep -qE "(80|443|8080)"; then
+        SEVERITY="low"
+    fi
 
-# ========== 4. Username / Password Guessing Placeholder ==========
-echo "[+] Starting username/password guessing phase..."
-echo "[!] (Placeholder) Insert brute-forcing logic here."
-echo ""
+    # If many critical ports are open
+    if [[ $(echo "$OPEN_PORTS" | tr ',' '\n' | wc -l) -ge 5 ]]; then
+        SEVERITY="critical"
+    fi
 
-# Example (fake) hydra command
-# while read -r ip; do
-#     echo "[*] Trying SSH login on $ip..."
-#     hydra -L usernames.txt -P passwords.txt ssh://$ip
-# done < "$ALIVE_IPS"
+    # Save individual report
+    REPORT=$(jq -n \
+        --arg ip "$ip" \
+        --arg hostname "$HOSTNAME" \
+        --arg ports "$OPEN_PORTS" \
+        --arg severity "$SEVERITY" \
+        '{ip: $ip, hostname: $hostname, open_ports: ($ports | split(",")), risk: $severity}'
+    )
+    
+    REPORTS+=("$REPORT")
+done
 
-# ========== Done ==========
-echo "[+] Full scan and setup complete."
-echo "[*] Results stored inside: $RESULTS_DIR"
+# Write final JSON
+jq -s '.' <<< "${REPORTS[@]}" > "$RESULT_JSON"
+
+echo "[+] Full scan and analysis complete!"
+echo "[*] JSON report saved to: $RESULT_JSON"
