@@ -11,6 +11,7 @@ RUN apt update && apt upgrade -y && \
     nmap \
     masscan \
     amass \
+    micro \
     theharvester \
     whatweb \
     dnsenum \
