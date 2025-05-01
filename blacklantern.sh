@@ -1,84 +1,68 @@
 #!/bin/bash
 
-# ========== Settings ==========
-NETWORK_RANGE="${1:-192.168.0.0/24}"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-RESULTS_DIR="attack_results/scan_$TIMESTAMP"
-RESULT_JSON="$RESULTS_DIR/scan_report.json"
-COMMON_PORTS="21,22,23,25,80,443,445,139,3306,3389,6379,8080,5900"
+# BlackLantern: Network scanner & analyzer
+# Author: Daniel Axelson
 
-# Create results folder
-mkdir -p "$RESULTS_DIR"
+# Configuration
+network_prefix="192.168.0"
+subnet="/24"
+output_dir="attack_results/scan_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$output_dir"
 
-# Empty previous JSON
-echo "[]" > "$RESULT_JSON"
+json_output="$output_dir/scan_report.json"
+echo "[]" > "$json_output"
 
-# ========== 1. Find Alive Hosts ==========
-echo "[+] Scanning network for alive hosts on $NETWORK_RANGE..."
-ALIVE_IPS=$(nmap -sn "$NETWORK_RANGE" -oG - | awk '/Up$/{print $2}')
+echo "[+] Scanning network for alive hosts on $network_prefix$subnet..."
 
-if [[ -z "$ALIVE_IPS" ]]; then
-    echo "[!] No alive hosts found. Exiting."
-    exit 1
-fi
-
+# Get alive IPs
+alive_ips=$(nmap -sn "$network_prefix$subnet" | grep "Nmap scan report" | awk '{print $NF}')
 echo "[+] Alive IPs found:"
-echo "$ALIVE_IPS"
+echo "$alive_ips"
 
-# ========== 2. Scan Alive Hosts and Analyze ==========
+# Loop through each alive IP and scan
 echo "[+] Scanning alive hosts for open ports and doing analysis..."
 
-REPORTS=()
-
-for ip in $ALIVE_IPS; do
+for ip in $alive_ips; do
     echo "[*] Processing $ip..."
 
     # Get open ports
-    OPEN_PORTS=$(nmap -p "$COMMON_PORTS" --open "$ip" -oG - | awk '/Ports:/{print $0}' | sed 's/.*Ports: //' | awk -F'/' '{print $1}' | paste -sd, -)
+    open_ports=$(nmap -p- --min-rate=1000 -T4 "$ip" | grep ^[0-9] | cut -d '/' -f 1 | tr '\n' ',' | sed 's/,$//')
 
-    if [[ -z "$OPEN_PORTS" ]]; then
-        OPEN_PORTS="none"
+    if [[ -z "$open_ports" ]]; then
+        echo "[*] $ip open ports: none"
+    else
+        echo "[*] $ip open ports: $open_ports"
     fi
 
-    echo "[*] $ip open ports: $OPEN_PORTS"
+    # Dummy hostname & severity logic (placeholder)
+    hostname=$(nslookup "$ip" | grep 'name =' | awk '{print $4}' | sed 's/\.$//')
+    risk_severity="low"
+    [[ "$open_ports" == *"22"* ]] && risk_severity="medium"
+    [[ "$open_ports" == *"23"* || "$open_ports" == *"445"* ]] && risk_severity="high"
 
-    # Lookup hostname
-    HOSTNAME=$(getent hosts "$ip" | awk '{print $2}')
-    if [[ -z "$HOSTNAME" ]]; then
-        HOSTNAME="(no hostname)"
-    fi
+    # Dummy SSH brute force placeholder
+    ssh_login=""
+    [[ "$open_ports" == *"22"* ]] && ssh_login="root:toor"  # For demonstration
 
-    # Security Analysis
-    SEVERITY="info"
-    if echo "$OPEN_PORTS" | grep -qE "(23|445|139)"; then
-        SEVERITY="high"
-    elif echo "$OPEN_PORTS" | grep -qE "(21|3306|6379|5900)"; then
-        SEVERITY="medium"
-    elif echo "$OPEN_PORTS" | grep -qE "(80|443|8080)"; then
-        SEVERITY="low"
-    fi
-
-    if [[ $(echo "$OPEN_PORTS" | tr ',' '\n' | wc -l) -ge 5 ]]; then
-        SEVERITY="critical"
-    fi
-
-    # Save raw nmap output
-    nmap -p "$COMMON_PORTS" --open "$ip" -oN "$RESULTS_DIR/${ip}_nmap.txt"
-
-    # Save JSON
-    REPORT=$(jq -n \
+    # Create JSON object with jq safely
+    json_entry=$(jq -n \
         --arg ip "$ip" \
-        --arg hostname "$HOSTNAME" \
-        --arg ports "$OPEN_PORTS" \
-        --arg severity "$SEVERITY" \
-        '{ip: $ip, hostname: $hostname, open_ports: ($ports | split(",")), risk: $severity}'
-    )
+        --arg hostname "$hostname" \
+        --arg ports "$open_ports" \
+        --arg severity "$risk_severity" \
+        --arg sshlogin "$ssh_login" '
+        {
+            ip: $ip,
+            hostname: $hostname,
+            open_ports: ($ports | split(",") | map(select(length > 0))),
+            risk: $severity,
+            ssh_bruteforce: ($sshlogin | length > 0 ? $sshlogin : null)
+        }')
 
-    REPORTS+=("$REPORT")
+    # Append to JSON file
+    tmpfile=$(mktemp)
+    jq ". += [$json_entry]" "$json_output" > "$tmpfile" && mv "$tmpfile" "$json_output"
 done
 
-# Write final JSON
-jq -s '.' <<< "${REPORTS[@]}" > "$RESULT_JSON"
-
 echo "[+] Full scan and analysis complete!"
-echo "[*] JSON report saved to: $RESULT_JSON"
+echo "[*] JSON report saved to: $json_output"
