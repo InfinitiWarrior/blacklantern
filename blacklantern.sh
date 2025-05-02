@@ -1,68 +1,77 @@
 #!/bin/bash
 
-# BlackLantern: Network scanner & analyzer
-# Author: Daniel Axelson
+# ========== Config ==========
+NETWORK_RANGE="192.168.0.0/24"
+RESULTS_DIR="attack_results"
+COMMON_PORTS="21,22,23,25,80,443,445,139,3306,3389,6379,8080,5900"
 
-# Configuration
-network_prefix="192.168.0"
-subnet="/24"
-output_dir="attack_results/scan_$(date +%Y%m%d_%H%M%S)"
-mkdir -p "$output_dir"
+# Output files
+ALIVE_IPS="$RESULTS_DIR/alive_ips.txt"
+PING_SWEEP="$RESULTS_DIR/ping_sweep.gnmap"
+SCAN_RESULTS="$RESULTS_DIR/nmap_scan.gnmap"
+JSON_OUTPUT="$RESULTS_DIR/security_report.json"
 
-json_output="$output_dir/scan_report.json"
-echo "[]" > "$json_output"
+# ========== Setup ==========
+mkdir -p "$RESULTS_DIR"
+echo "[]" > "$JSON_OUTPUT"
 
-echo "[+] Scanning network for alive hosts on $network_prefix$subnet..."
+# ========== 1. Ping Sweep ==========
+echo "[+] Scanning for alive hosts in $NETWORK_RANGE..."
+nmap -sn "$NETWORK_RANGE" -oG "$PING_SWEEP"
+grep "Up" "$PING_SWEEP" | awk '{print $2}' > "$ALIVE_IPS"
 
-# Get alive IPs
-alive_ips=$(nmap -sn "$network_prefix$subnet" | grep "Nmap scan report" | awk '{print $NF}')
-echo "[+] Alive IPs found:"
-echo "$alive_ips"
+# ========== 2. Port Scan ==========
+echo "[+] Scanning open ports on alive hosts..."
+nmap -p "$COMMON_PORTS" --open -oG "$SCAN_RESULTS" -iL "$ALIVE_IPS"
 
-# Loop through each alive IP and scan
-echo "[+] Scanning alive hosts for open ports and doing analysis..."
+# ========== 3. Analyze and Build JSON ==========
+echo "[+] Analyzing scan results and assigning risk levels..."
 
-for ip in $alive_ips; do
-    echo "[*] Processing $ip..."
+while read -r ip; do
+    OPEN_PORTS=$(grep "$ip" "$SCAN_RESULTS" | grep -oP "Ports: \K.*" | cut -d '/' -f 1 | cut -d ',' -f1 | tr '\n' ',' | sed 's/,$//')
 
-    # Get open ports
-    open_ports=$(nmap -p- --min-rate=1000 -T4 "$ip" | grep ^[0-9] | cut -d '/' -f 1 | tr '\n' ',' | sed 's/,$//')
-
-    if [[ -z "$open_ports" ]]; then
-        echo "[*] $ip open ports: none"
-    else
-        echo "[*] $ip open ports: $open_ports"
+    if [[ -z "$OPEN_PORTS" ]]; then
+        continue
     fi
 
-    # Dummy hostname & severity logic (placeholder)
-    hostname=$(nslookup "$ip" | grep 'name =' | awk '{print $4}' | sed 's/\.$//')
-    risk_severity="low"
-    [[ "$open_ports" == *"22"* ]] && risk_severity="medium"
-    [[ "$open_ports" == *"23"* || "$open_ports" == *"445"* ]] && risk_severity="high"
+    # Default severity logic
+    SEVERITY="low"
+    if echo "$OPEN_PORTS" | grep -qE "445|139"; then
+        SEVERITY="critical"
+    elif echo "$OPEN_PORTS" | grep -qE "23|3389"; then
+        SEVERITY="high"
+    elif echo "$OPEN_PORTS" | grep -qE "22|21|3306|6379|5900"; then
+        SEVERITY="medium"
+    fi
 
-    # Dummy SSH brute force placeholder
-    ssh_login=""
-    [[ "$open_ports" == *"22"* ]] && ssh_login="root:toor"  # For demonstration
+    # Get hostname if available
+    HOSTNAME=$(nslookup "$ip" 2>/dev/null | awk -F'name = ' '/name =/ {gsub(/\.$/, "", $2); print $2}' | head -n1)
+    [[ -z "$HOSTNAME" ]] && HOSTNAME="(no hostname)"
 
-    # Create JSON object with jq safely
-    json_entry=$(jq -n \
-        --arg ip "$ip" \
-        --arg hostname "$hostname" \
-        --arg ports "$open_ports" \
-        --arg severity "$risk_severity" \
-        --arg sshlogin "$ssh_login" '
-        {
-            ip: $ip,
-            hostname: $hostname,
-            open_ports: ($ports | split(",") | map(select(length > 0))),
-            risk: $severity,
-            ssh_bruteforce: ($sshlogin | length > 0 ? $sshlogin : null)
-        }')
+    # Add result to JSON
+    jq --arg ip "$ip" \
+       --arg hostname "$HOSTNAME" \
+       --arg ports "$OPEN_PORTS" \
+       --arg severity "$SEVERITY" \
+       '. += [{"ip": $ip, "hostname": $hostname, "open_ports": ($ports | split(",")), "severity": $severity}]' \
+       "$JSON_OUTPUT" > "$JSON_OUTPUT.tmp" && mv "$JSON_OUTPUT.tmp" "$JSON_OUTPUT"
 
-    # Append to JSON file
-    tmpfile=$(mktemp)
-    jq ". += [$json_entry]" "$json_output" > "$tmpfile" && mv "$tmpfile" "$json_output"
-done
+done < "$ALIVE_IPS"
 
-echo "[+] Full scan and analysis complete!"
-echo "[*] JSON report saved to: $json_output"
+# ========== 4. Placeholder for Credential Brute-Forcing ==========
+echo "[+] Starting username/password guessing phase... (placeholder)"
+
+# Future logic: Update severity in JSON if weak login is found
+# Example logic for SSH brute-force:
+# while read -r ip; do
+#     hydra -L usernames.txt -P passwords.txt ssh://$ip -f -t 4 -o hydra_output.txt
+#     if grep -q "login:" hydra_output.txt; then
+#         # Update JSON severity to critical for that IP
+#         jq --arg ip "$ip" 'map(if .ip == $ip then .severity = "critical" else . end)' \
+#         "$JSON_OUTPUT" > "$JSON_OUTPUT.tmp" && mv "$JSON_OUTPUT.tmp" "$JSON_OUTPUT"
+#     fi
+# done < "$ALIVE_IPS"
+
+# ========== Done ==========
+echo "[✓] Scan complete. Results saved to $JSON_OUTPUT"
+jq . "$JSON_OUTPUT"
